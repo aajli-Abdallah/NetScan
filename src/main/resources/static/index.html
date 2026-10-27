@@ -1,0 +1,312 @@
+<!--
+  Copyright (c) 2026 AAJLI Abdallah
+  Email: ingenieur.aajli@gmail.com
+  GitHub: https://github.com/aajli-Abdallah
+  Website: https://aajli.com
+
+  NetScan — Home network scanner and intruder-alert system.
+  All rights reserved. See LICENSE for details.
+-->
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NetScan</title>
+<style>
+:root{--bg:#07110f;--panel:#0d1b18;--line:#1c3a33;--fg:#d7f5ea;--mut:#7fa396;--ok:#3ddc97;--bad:#ff5d5d;--off:#5b6b7a;--me:#4cc9f0}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px system-ui,sans-serif}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid var(--line)}
+h1{margin:0;font-size:18px;letter-spacing:.14em}
+h1 small{color:var(--mut);font-weight:400;letter-spacing:0}
+main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16px 20px}
+@media(max-width:860px){main{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px}
+canvas{width:100%;aspect-ratio:1;display:block;max-height:78vh;margin:auto;cursor:pointer}
+button{background:var(--ok);color:#04130d;border:0;border-radius:8px;padding:8px 14px;font-weight:600;cursor:pointer;min-height:36px;margin-right:8px}
+button.danger{background:var(--bad);color:#fff}
+button:disabled{opacity:.5}
+input[type=text]{width:100%;background:#06100d;color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px}
+.mut{color:var(--mut)}
+ul{list-style:none;margin:8px 0 0;padding:0;max-height:320px;overflow:auto}
+li{padding:6px 0;border-bottom:1px solid var(--line);display:flex;gap:8px}
+li:last-child{border:0}
+.dot{width:8px;height:8px;border-radius:50%;margin-top:5px;flex:none}
+.legend span{margin-right:14px}
+aside{display:grid;gap:16px;align-content:start}
+button.ghost{background:transparent;color:var(--fg);border:1px solid var(--line)}
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;padding:16px 20px 0}
+@media(max-width:860px){.tiles{grid-template-columns:repeat(2,1fr)}}
+.tile{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px;display:flex;flex-direction:column}
+.tile b{font-size:26px}
+#live{color:var(--off)}
+#toasts{position:fixed;right:16px;bottom:16px;display:grid;gap:8px;z-index:9}
+.toast{background:var(--panel);border:1px solid var(--ok);border-radius:10px;padding:10px 14px;cursor:pointer;max-width:320px}
+.toast.bad{border-color:var(--bad)}
+a{color:var(--ok)}
+select{background:#06100d;color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:7px}
+</style></head>
+<body>
+<header>
+  <h1>NETSCAN <small id="ver"></small></h1>
+  <div class="mut"><span id="live" title="Live updates">&#9679;</span> <span id="status">Loading...</span></div>
+  <div><button id="notify" class="ghost">Enable alerts</button><button id="testAlert" class="ghost">Test alert</button><button id="scan">Scan now</button><button id="logout" class="ghost">Sign out</button></div>
+</header>
+<div class="tiles" id="tiles"></div>
+<main>
+  <section class="card">
+    <canvas id="radar"></canvas>
+    <div class="legend mut">
+      <span style="color:var(--ok)">&#9679; known</span><span style="color:var(--bad)">&#9679; unknown</span>
+      <span style="color:var(--off)">&#9679; offline</span><span style="color:var(--me)">&#9679; this computer</span>
+    </div>
+  </section>
+  <aside>
+    <section class="card" id="detail"></section>
+    <section class="card"><b>Activity</b><ul id="events"></ul></section>
+    <section class="card"><b>Backup</b>
+      <div class="mut" style="margin:6px 0">Daily copies are kept in data/backups. Keep one copy outside this PC.</div>
+      <div><a href="/api/export/backup.json">Backup (JSON)</a> - <a href="/api/export/devices.csv">Devices (CSV)</a> - <a href="/api/export/events.csv">Events (CSV)</a></div>
+      <div style="margin-top:10px"><input type="file" id="restoreFile" accept=".json,application/json"></div>
+      <div style="margin-top:6px"><select id="restoreMode"><option value="merge">Merge</option><option value="replace">Replace</option></select> <button id="restorePreview">Preview</button></div>
+      <div id="restoreOut" class="mut" style="margin-top:8px"></div>
+    </section>
+  </aside>
+</main>
+<footer style="text-align:center;padding:18px 20px 24px;color:var(--mut);font-size:12px;border-top:1px solid var(--line);margin-top:24px">
+  &copy; 2026 <a href="https://aajli.com" target="_blank" rel="noopener">AAJLI Abdallah</a> &mdash;
+  <a href="mailto:ingenieur.aajli@gmail.com">ingenieur.aajli@gmail.com</a> &mdash;
+  <a href="https://github.com/aajli-Abdallah/NetScan" target="_blank" rel="noopener">GitHub</a>
+</footer>
+<div id="toasts"></div>
+<script>
+const $ = id => document.getElementById(id);
+const TAU = Math.PI * 2;
+const cv = $('radar'), ctx = cv.getContext('2d');
+let devices = [], selected = null, status = null, selfMac = null, detailId = undefined;
+
+function hash(s, seed) {
+  let h = 2166136261 ^ seed;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return ((h >>> 0) % 10000) / 10000;
+}
+const name = d => d.label || d.hostname || d.lastIp || d.mac;
+function ago(iso) {
+  if (!iso) return '-';
+  const s = Math.max(0, (Date.now() - new Date(iso)) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.floor(s / 60) + ' min ago';
+  if (s < 86400) return Math.floor(s / 3600) + ' h ago';
+  return Math.floor(s / 86400) + ' d ago';
+}
+function csrf() {
+  const m = document.cookie.match(/(?:^|; )XSRF-TOKEN=([^;]*)/);
+  return m ? decodeURIComponent(m[1]) : '';
+}
+async function api(path, opt) {
+  opt = opt || {};
+  if (opt.method && opt.method !== 'GET') opt.headers = Object.assign({ 'X-XSRF-TOKEN': csrf() }, opt.headers);
+  const r = await fetch(path, opt);
+  if (r.status === 401 || (r.redirected && r.url.includes('/login'))) { location.href = '/login'; throw new Error('Signed out'); }
+  if (!r.ok) { let m = ''; try { m = (await r.json()).message; } catch (e) {} throw new Error(m || path + ' -> ' + r.status); }
+  return r.status === 204 ? null : r.json();
+}
+function place(d, cx, cy, R) {
+  if (d.mac === selfMac) return { x: cx, y: cy, a: 0 };
+  const a = TAU * hash(d.mac, 1), h2 = hash(d.mac, 2);
+  const r = d.online ? R * (0.28 + 0.45 * h2) : R * (0.86 + 0.1 * h2);
+  return { x: cx + r * Math.cos(a), y: cy + r * Math.sin(a), a };
+}
+function draw(t) {
+  const dpr = window.devicePixelRatio || 1, w = cv.clientWidth;
+  if (w && cv.width !== Math.round(w * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(w * dpr); }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, w);
+  const cx = w / 2, cy = w / 2, R = w / 2 - 10, sw = ((t / 5000) % 1) * TAU;
+  ctx.strokeStyle = '#1c3a33'; ctx.lineWidth = 1;
+  for (let i = 1; i <= 4; i++) { ctx.beginPath(); ctx.arc(cx, cy, R * i / 4, 0, TAU); ctx.stroke(); }
+  ctx.beginPath(); ctx.moveTo(cx - R, cy); ctx.lineTo(cx + R, cy); ctx.moveTo(cx, cy - R); ctx.lineTo(cx, cy + R); ctx.stroke();
+  if (ctx.createConicGradient) {
+    const g = ctx.createConicGradient(sw - 1.2, cx, cy);
+    g.addColorStop(0, 'rgba(61,220,151,0)'); g.addColorStop(0.19, 'rgba(61,220,151,.30)');
+    g.addColorStop(0.1901, 'rgba(61,220,151,0)'); g.addColorStop(1, 'rgba(61,220,151,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, cy, R, 0, TAU); ctx.fill();
+  }
+  ctx.strokeStyle = 'rgba(61,220,151,.6)'; ctx.beginPath(); ctx.moveTo(cx, cy);
+  ctx.lineTo(cx + R * Math.cos(sw), cy + R * Math.sin(sw)); ctx.stroke();
+  ctx.textAlign = 'center'; ctx.font = '11px system-ui';
+  if (!devices.length) { ctx.fillStyle = '#7fa396'; ctx.fillText('No devices yet. Press "Scan now".', cx, cy + 4); }
+  for (const d of devices) {
+    const p = d._p = place(d, cx, cy, R), me = d.mac === selfMac;
+    const col = me ? '#4cc9f0' : !d.online ? '#5b6b7a' : d.known ? '#3ddc97' : '#ff5d5d';
+    const diff = (((sw - p.a) % TAU) + TAU) % TAU;
+    const al = !d.online && !me ? 0.4 : 0.4 + 0.6 * (1 - diff / TAU);
+    if (d.online && !d.known && !me) {
+      const k = (t / 60) % 14;
+      ctx.strokeStyle = col; ctx.globalAlpha = al * (1 - k / 14);
+      ctx.beginPath(); ctx.arc(p.x, p.y, 6 + k, 0, TAU); ctx.stroke();
+    }
+    ctx.globalAlpha = al; ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(p.x, p.y, me ? 8 : 6, 0, TAU); ctx.fill();
+    if (selected && d.id === selected.id) {
+      ctx.globalAlpha = 1; ctx.strokeStyle = '#fff';
+      ctx.beginPath(); ctx.arc(p.x, p.y, 12, 0, TAU); ctx.stroke();
+    }
+    ctx.globalAlpha = Math.max(al, 0.6); ctx.fillStyle = '#d7f5ea';
+    ctx.fillText(name(d).slice(0, 16), p.x, p.y + 22);
+  }
+  ctx.globalAlpha = 1;
+  requestAnimationFrame(draw);
+}
+cv.addEventListener('click', e => {
+  const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+  let best = null, bd = 18;
+  for (const d of devices) if (d._p) { const dd = Math.hypot(d._p.x - x, d._p.y - y); if (dd < bd) { bd = dd; best = d; } }
+  selected = best; showDetail();
+});
+function el(tag, text, cls) { const e = document.createElement(tag); if (text) e.textContent = text; if (cls) e.className = cls; return e; }
+function button(text, fn, cls) {
+  const b = el('button', text, cls);
+  b.onclick = async () => { b.disabled = true; try { await fn(); } catch (e) { alert(e.message); } b.disabled = false; };
+  return b;
+}
+function showDetail() {
+  const box = $('detail'); box.replaceChildren();
+  detailId = selected ? selected.id : null;
+  const d = selected;
+  if (!d) { box.append(el('div', 'Click a dot on the radar.', 'mut')); return; }
+  box.append(el('b', name(d)));
+  for (const line of [d.mac + (d.lastIp ? ' / ' + d.lastIp : ''),
+      (d.vendor || 'Unknown vendor') + (d.hostname ? ' - ' + d.hostname : ''),
+      (d.online ? 'Online' : 'Offline') + ' - last seen ' + ago(d.lastSeen), 'First seen ' + ago(d.firstSeen)]) {
+    const l = el('div', line, 'mut'); l.style.marginTop = '4px'; box.append(l);
+  }
+  const inp = el('input'); inp.type = 'text'; inp.maxLength = 100; inp.placeholder = 'Label (e.g. Dad phone)';
+  inp.value = d.label || ''; inp.style.margin = '12px 0 8px';
+  const lab = el('label'); const cb = el('input'); cb.type = 'checkbox'; cb.checked = d.known;
+  lab.append(cb, ' Known device'); lab.style.display = 'block'; lab.style.marginBottom = '12px';
+  box.append(inp, lab,
+    button('Save', async () => {
+      await api('/api/saved/' + d.id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label: inp.value, known: cb.checked }) });
+      await refresh(true);
+    }),
+    button('Forget', async () => {
+      if (!confirm('Forget this device? It returns as unknown if seen again.')) return;
+      await api('/api/saved/' + d.id, { method: 'DELETE' }); selected = null; await refresh(true);
+    }, 'danger'));
+  const pr = el('div'); pr.style.marginTop = '14px';
+  const ports = d.openPorts || [];
+  pr.append(el('div', d.portsScannedAt ? 'Open ports (scanned ' + ago(d.portsScannedAt) + '):' : 'Ports not scanned yet.', 'mut'));
+  for (const p of ports) pr.append(el('div', p.port + ' - ' + p.service));
+  if (d.portsScannedAt && !ports.length) pr.append(el('div', 'None of the common ports are open.'));
+  const pb = button('Scan ports', async () => {
+    await api('/api/saved/' + d.id + '/portscan', { method: 'POST' }); await refresh(true);
+  });
+  pb.style.marginTop = '8px'; pr.append(pb); box.append(pr);
+}
+function renderStatus() {
+  const on = devices.filter(d => d.online).length, unk = devices.filter(d => d.online && !d.known).length;
+  $('status').textContent = (status.lastScanAt ? 'Last scan ' + ago(status.lastScanAt) : 'No scan yet')
+    + (status.schedulerEnabled ? ' - auto every ' + Math.round(status.intervalSeconds / 60) + ' min' : ' - auto-scan off')
+    + ' - ' + on + ' online - ' + unk + ' unknown';
+}
+function renderEvents(list) {
+  const ul = $('events'); ul.replaceChildren();
+  if (!list.length) { ul.append(el('li', 'No activity yet.', 'mut')); return; }
+  const verb = { JOINED: 'joined the network', ONLINE: 'came online', OFFLINE: 'went offline' };
+  for (const e of list) {
+    const li = el('li'), dot = el('span', '', 'dot');
+    dot.style.background = e.type === 'OFFLINE' ? '#5b6b7a' : e.known ? '#3ddc97' : '#ff5d5d';
+    const box = el('div', (e.label || e.ip || e.mac) + ' ' + (verb[e.type] || e.type));
+    box.append(el('div', ago(e.at), 'mut'));
+    li.append(dot, box); ul.append(li);
+  }
+}
+function renderTiles() {
+  const on = devices.filter(d => d.online), unk = on.filter(d => !d.known).length;
+  const tile = (label, v, color) => { const t = el('div', '', 'tile'), b = el('b', String(v)); b.style.color = color; t.append(b, el('span', label, 'mut')); return t; };
+  $('tiles').replaceChildren(tile('Online', on.length, 'var(--fg)'), tile('Known online', on.length - unk, 'var(--ok)'),
+    tile('Unknown online', unk, unk ? 'var(--bad)' : 'var(--fg)'), tile('Offline', devices.length - on.length, 'var(--off)'));
+}
+function toast(text, bad) {
+  const t = el('div', text, 'toast' + (bad ? ' bad' : '')); $('toasts').append(t);
+  t.onclick = () => t.remove(); setTimeout(() => t.remove(), 12000);
+}
+function beep() {
+  try {
+    const a = new (window.AudioContext || window.webkitAudioContext)(), o = a.createOscillator(), g = a.createGain();
+    o.connect(g); g.connect(a.destination); o.frequency.value = 880; g.gain.value = 0.05; o.start(); o.stop(a.currentTime + 0.25);
+  } catch (e) {}
+}
+function alertUser(ev) {
+  const who = ev.label || ev.ip || ev.mac;
+  toast('New unknown device: ' + who + (ev.mac ? ' (' + ev.mac + ')' : ''), true); beep();
+  if ('Notification' in window && Notification.permission === 'granted') new Notification('NetScan: new unknown device', { body: who });
+}
+let soonTimer;
+function soon() { clearTimeout(soonTimer); soonTimer = setTimeout(() => refresh(false), 400); }
+function connectStream() {
+  const es = new EventSource('/api/stream');
+  es.onopen = () => { $('live').style.color = 'var(--ok)'; };
+  es.onerror = () => { $('live').style.color = 'var(--bad)'; };
+  es.addEventListener('scan', soon);
+  es.addEventListener('device', m => {
+    const ev = JSON.parse(m.data);
+    if (ev.type === 'JOINED' && !ev.known) alertUser(ev);
+    soon();
+  });
+}
+function restoreUi() {
+  const out = $('restoreOut'), json = { 'Content-Type': 'application/json' };
+  $('restorePreview').onclick = async () => {
+    out.replaceChildren();
+    const f = $('restoreFile').files[0];
+    if (!f) { out.textContent = 'Choose a backup file first.'; return; }
+    let data;
+    try { data = JSON.parse(await f.text()); } catch (e) { out.textContent = 'That file is not valid JSON.'; return; }
+    const mode = $('restoreMode').value;
+    try {
+      const r = await api('/api/import/preview?mode=' + mode, { method: 'POST', headers: json, body: JSON.stringify(data) });
+      out.append(el('div', mode + ': ' + r.created + ' new, ' + r.updated + ' updated, ' + r.unchanged + ' unchanged, ' + r.removed + ' removed, ' + r.skipped + ' skipped'));
+      for (const w of r.warnings) out.append(el('div', w));
+      const ap = button('Apply', async () => {
+        if (mode === 'replace' && !confirm('Replace deletes devices that are not in the backup. Continue?')) return;
+        const x = await api('/api/import?mode=' + mode, { method: 'POST', headers: json, body: JSON.stringify(data) });
+        out.replaceChildren(el('div', 'Done: ' + x.created + ' new, ' + x.updated + ' updated, ' + x.removed + ' removed.'));
+        await refresh(true);
+      });
+      ap.style.marginTop = '8px'; out.append(ap);
+    } catch (e) { out.textContent = e.message; }
+  };
+}
+async function refresh(force) {
+  try {
+    const [s, saved, ev] = await Promise.all([api('/api/status'), api('/api/saved'), api('/api/events?limit=30')]);
+    status = s; devices = saved;
+    if (selected) selected = devices.find(d => d.id === selected.id) || null;
+    renderStatus(); renderTiles(); renderEvents(ev);
+    if (force || (selected ? selected.id : null) !== detailId) showDetail();
+  } catch (e) { $('status').textContent = 'Cannot reach NetScan: ' + e.message; }
+}
+$('scan').onclick = async () => {
+  const b = $('scan'); b.disabled = true; b.textContent = 'Scanning...';
+  try { await api('/api/devices?refresh=true'); } catch (e) { alert(e.message); }
+  b.disabled = false; b.textContent = 'Scan now'; await refresh(true);
+};
+api('/api/info').then(i => $('ver').textContent = 'v' + i.version).catch(() => {});
+api('/api/network').then(n => selfMac = n.localMac).catch(() => {});
+$('testAlert').onclick = () => api('/api/alerts/test', { method: 'POST' }).catch(e => alert(e.message));
+$('logout').onclick = async () => {
+  await fetch('/logout', { method: 'POST', headers: { 'X-XSRF-TOKEN': csrf() } });
+  location.href = '/login';
+};
+restoreUi();
+$('notify').onclick = async () => {
+  if (!('Notification' in window)) { toast('Desktop alerts are not supported here'); return; }
+  const p = await Notification.requestPermission();
+  toast(p === 'granted' ? 'Desktop alerts enabled' : 'Desktop alerts blocked', p !== 'granted');
+};
+showDetail(); refresh(true); setInterval(() => refresh(false), 60000); connectStream();
+requestAnimationFrame(draw);
+</script>
+</body></html>
